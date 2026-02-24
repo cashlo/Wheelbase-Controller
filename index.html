@@ -89,10 +89,10 @@
         const zoneRight = document.getElementById('zone-right');
 
         const managerLeft = nipplejs.create({
-            zone: zoneLeft, color: 'cyan', mode: 'dynamic', size: 120
+            zone: zoneLeft, color: 'cyan', mode: 'static', position: { left: '50%', top: '50%' }, size: 120
         });
         const managerRight = nipplejs.create({
-            zone: zoneRight, color: 'magenta', mode: 'dynamic', size: 120
+            zone: zoneRight, color: 'magenta', mode: 'static',position: { left: '50%', top: '50%' }, size: 120
         });
 
         // 左スティックイベント (前後左右)
