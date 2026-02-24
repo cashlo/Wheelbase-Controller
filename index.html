@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Mecanum Analog Controller</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.1/nipplejs.min.js"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #222; color: #fff; margin: 0; padding: 0; overflow: hidden; user-select: none; touch-action: none; }
+        #header { padding: 10px; background: #333; }
+        button { padding: 10px 20px; font-size: 16px; border-radius: 8px; border: none; cursor: pointer; }
+        .connect-btn { background: #007bff; color: white; margin-bottom: 5px; }
+        .connect-btn:active { background: #0056b3; }
+        #status { font-weight: bold; color: #ff4c4c; font-size: 14px; }
+        
+        /* ジョイスティックのエリア分割 */
+        #joystick-container { display: flex; width: 100vw; height: calc(100vh - 80px); }
+        .joystick-zone { flex: 1; position: relative; }
+        .zone-label { position: absolute; top: 20px; width: 100%; color: #888; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+    <div id="header">
+        <button class="connect-btn" onclick="connectBluetooth()">Bluetooth 接続</button>
+        <button class="stop-btn" onclick="stop()">緊急停止</button>
+        <div id="status">未接続</div>
+    </div>
+
+    <div id="joystick-container">
+        <div id="zone-left" class="joystick-zone">
+            <div class="zone-label">移動 (Translate)</div>
+        </div>
+        <div id="zone-right" class="joystick-zone">
+            <div class="zone-label">旋回 (Rotate)</div>
+        </div>
+    </div>
+
+    <script>
+        const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+        const CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+        let bleCharacteristic;
+
+        // 現在の目標スピード
+        let targetVy = 0, targetVx = 0, targetW = 0;
+        // 最後に送信したスピード（不要な通信を省くため）
+        let lastVy = 0, lastVx = 0, lastW = 0;
+
+        // 最大RPM（1000 = 10.00 RPM）
+        const MAX_SPEED = 20000; 
+
+        function stop() {
+            targetVy = 0; targetVx = 0; targetW = 0;
+            const commandString = `${targetVy},${targetVx},${targetW}`;
+            const encoder = new TextEncoder();
+            bleCharacteristic.writeValue(encoder.encode(commandString));
+        }
+
+        // --- Bluetooth 接続処理 ---
+        async function connectBluetooth() {
+            try {
+                document.getElementById('status').innerText = "デバイスを探しています...";
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'Mecanum_Bot' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                document.getElementById('status').innerText = "サーバーに接続中...";
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                bleCharacteristic = await service.getCharacteristic(CHAR_UUID);
+                
+                document.getElementById('status').innerText = "接続完了！";
+                document.getElementById('status').style.color = "#28a745";
+                
+                device.addEventListener('gattserverdisconnected', () => {
+                    document.getElementById('status').innerText = "切断されました";
+                    document.getElementById('status').style.color = "#ff4c4c";
+                    bleCharacteristic = null;
+                });
+            } catch (error) {
+                console.error(error);
+                document.getElementById('status').innerText = "接続失敗: " + error;
+            }
+        }
+
+        // --- ジョイスティックの設定 ---
+        const zoneLeft = document.getElementById('zone-left');
+        const zoneRight = document.getElementById('zone-right');
+
+        const managerLeft = nipplejs.create({
+            zone: zoneLeft, color: 'cyan', mode: 'dynamic', size: 120
+        });
+        const managerRight = nipplejs.create({
+            zone: zoneRight, color: 'magenta', mode: 'dynamic', size: 120
+        });
+
+        // 左スティックイベント (前後左右)
+        managerLeft.on('move', (evt, data) => {
+            // data.vector は -1.0 から 1.0 の範囲
+            targetVx = Math.round(data.vector.x * MAX_SPEED);
+            targetVy = Math.round(data.vector.y * MAX_SPEED); 
+        });
+        managerLeft.on('end', () => {
+            targetVx = 0;
+            targetVy = 0;
+        });
+
+        // 右スティックイベント (旋回)
+        managerRight.on('move', (evt, data) => {
+            // 旋回は敏感すぎると操作しにくいため、MAX_SPEEDを少し絞る（ここでは 70% に設定）
+            targetW = Math.round(data.vector.x * (MAX_SPEED * -0.7));
+        });
+        managerRight.on('end', () => {
+            targetW = 0;
+        });
+
+        // --- BLE 定期送信ループ (20Hz) ---
+        // 指を動かすたびに送信するとESP32がパンクするため、50ミリ秒ごとに変更があった場合のみ送信します
+        setInterval(async () => {
+            if (!bleCharacteristic) return;
+
+            // 値が前回と異なる場合のみ送信
+            if (targetVy !== lastVy || targetVx !== lastVx || targetW !== lastW) {
+                const commandString = `${targetVy},${targetVx},${targetW}`;
+                const encoder = new TextEncoder();
+                
+                try {
+                    await bleCharacteristic.writeValue(encoder.encode(commandString));
+                    // 送信成功したら記録を更新
+                    lastVy = targetVy; lastVx = targetVx; lastW = targetW;
+                } catch (error) {
+                    console.error("BLE Write Error:", error);
+                }
+            }
+        }, 50); 
+    </script>
+</body>
+</html>
